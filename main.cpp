@@ -15,6 +15,9 @@
 #include <microsoft.ui.xaml.window.h>
 #include <MddBootstrap.h> // Загрузчик Windows App SDK
 
+// Указываем линкеру принудительно подключить код загрузчика WinUI 3.0
+#pragma comment(lib, "Microsoft.WindowsAppRuntime.Bootstrap.lib")
+
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_OPEN 1002
@@ -167,7 +170,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     HRESULT hr = MddBootstrapInitialize2(
         0x00010005, 
         L"", 
-        PACKAGE_VERSION{}, // Исправлено: Используем PACKAGE_VERSION вместо MIN_VERSION
+        PACKAGE_VERSION{}, 
         MddBootstrapInitializeOptions_OnNoMatch_ShowUI
     );
     if (FAILED(hr)) {

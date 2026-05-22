@@ -20,8 +20,13 @@ set_property(TARGET Antivirus PROPERTY VS_GLOBAL_Platform "x64")
 # Указываем, что наше приложение "Распакованное" (Unpackaged)
 set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsPackageType "None")
 
+# --- КРИТИЧЕСКИЙ ФИКС: ДЕЛАЕМ ПРИЛОЖЕНИЕ ПОЛНОСТЬЮ АВТОНОМНЫМ (Self-Contained) ---
+# Копируем абсолютно все системные DLL рантайма WinUI 3.0 прямо в нашу папку сборки.
+# Программа будет запускаться на любом ПК БЕЗ установки каких-либо внешних библиотек!
+set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsAppSDKSelfContained "true")
+set_property(TARGET Antivirus PROPERTY VS_GLOBAL_SelfContained "true")
+
 # --- ИСПРАВЛЕНИЕ БАГА VS2022 "Sequence contains no elements" ---
-# Явно говорим сборщику, что наш проект - чистый C++ (Native)
 set_target_properties(Antivirus PROPERTIES
     VS_GLOBAL_NuGetTargetMoniker "native,Version=v0.0"
     VS_GLOBAL_TargetFrameworkMoniker "native,Version=v0.0"

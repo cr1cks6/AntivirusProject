@@ -14,6 +14,7 @@
 // Подключаем сгенерированный MIDL заголовок RPC
 #include "AntivirusRpc_h.h"
 
+// Принудительно подключаем библиотеку работы с профилями пользователей
 #pragma comment(lib, "userenv.lib")
 
 // Глобальные состояния службы
@@ -23,18 +24,21 @@ HANDLE g_ServiceStopEvent = INVALID_HANDLE_VALUE;
 std::mutex g_ProcessesMutex;
 std::vector<HANDLE> g_ActiveGuiHandles;
 
-// Функции защиты процессов (DACL)
+// --- Системные функции самозащиты процессов ---
+
+// БОНУС 2, 3 и 4: Настройка DACL для предотвращения завершения процессов
 void ProtectProcessFromTermination(HANDLE hProcess) {
     PSID pAdminSid = NULL;
     PSID pUserSid = NULL;
     SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
     
+    // Инициализируем SID-идентификаторы для групп Администраторы и Пользователи
     AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_REGS_ADMINS, 0, 0, 0, 0, 0, 0, &pAdminSid);
     AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_REGS_USERS, 0, 0, 0, 0, 0, 0, &pUserSid);
 
     EXPLICIT_ACCESSW ea[2] = {};
     
-    // БОНУС 4: Запрещаем администраторам завершать процесс
+    // БОНУС 4: Запрещаем администраторам завершать процесс (DENY_ACCESS на PROCESS_TERMINATE)
     ea[0].grfAccessPermissions = PROCESS_TERMINATE;
     ea[0].grfAccessMode = DENY_ACCESS;
     ea[0].grfInheritance = NO_INHERITANCE;
@@ -42,7 +46,7 @@ void ProtectProcessFromTermination(HANDLE hProcess) {
     ea[0].Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
     ea[0].Trustee.ptstrName = (LPWSTR)pAdminSid;
 
-    // БОНУС 2 и 3: Запрещаем обычным пользователям завершать процесс
+    // БОНУС 2 и 3: Запрещаем обычным пользователям завершать процесс (DENY_ACCESS на PROCESS_TERMINATE)
     ea[1].grfAccessPermissions = PROCESS_TERMINATE;
     ea[1].grfAccessMode = DENY_ACCESS;
     ea[1].grfInheritance = NO_INHERITANCE;
@@ -53,26 +57,29 @@ void ProtectProcessFromTermination(HANDLE hProcess) {
     PACL pNewDacl = NULL;
     SetEntriesInAclW(2, ea, NULL, &pNewDacl);
 
-    // Применяем DACL к дескриптору безопасности процесса
+    // Применяем новый список контроля доступа (DACL) к процессу
     SetSecurityInfo(hProcess, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, pNewDacl, NULL);
 
+    // Освобождаем память
     if (pNewDacl) LocalFree(pNewDacl);
     if (pAdminSid) FreeSid(pAdminSid);
     if (pUserSid) FreeSid(pUserSid);
 }
 
-// Запуск GUI в сессии пользователя
+// Требование 1 и 2: Запуск GUI в конкретной сессии пользователя
 void LaunchGuiInSession(DWORD sessionId) {
     HANDLE hToken = NULL;
+    // Запрашиваем токен пользователя текущей сессии
     if (!WTSQueryUserToken(sessionId, &hToken)) return;
 
     HANDLE hDuplicatedToken = NULL;
+    // Дублируем токен для возможности запуска процесса от его имени
     DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, NULL, SecurityIdentification, TokenPrimary, &hDuplicatedToken);
     CloseHandle(hToken);
 
     if (!hDuplicatedToken) return;
 
-    // Получаем путь к нашему GUI
+    // Получаем путь к нашему GUI (Antivirus.exe лежит рядом со службой)
     wchar_t servicePath[MAX_PATH];
     GetModuleFileNameW(NULL, servicePath, MAX_PATH);
     std::wstring guiPath(servicePath);
@@ -84,10 +91,11 @@ void LaunchGuiInSession(DWORD sessionId) {
     STARTUPINFOW si = {};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE; // Требование 1 и 2: Окно при запуске должно быть скрыто
+    si.wShowWindow = SW_HIDE; // Окно при запуске должно быть скрыто
 
     PROCESS_INFORMATION pi = {};
     
+    // Создаем среду окружения пользователя (чтобы WinUI 3 корректно загрузился)
     void* pEnv = NULL;
     CreateEnvironmentBlock(&pEnv, hDuplicatedToken, FALSE);
 
@@ -100,9 +108,10 @@ void LaunchGuiInSession(DWORD sessionId) {
     );
 
     if (success) {
-        // БОНУС 3: Защищаем запущенный GUI от принудительного закрытия пользователями
+        // БОНУС 3: Защищаем запущенный GUI от закрытия пользователями и администраторами
         ProtectProcessFromTermination(pi.hProcess);
 
+        // Сохраняем хэндл в глобальный список для последующей остановки
         std::lock_guard<std::mutex> lock(g_ProcessesMutex);
         g_ActiveGuiHandles.push_back(pi.hProcess);
         CloseHandle(pi.hThread);
@@ -112,7 +121,7 @@ void LaunchGuiInSession(DWORD sessionId) {
     CloseHandle(hDuplicatedToken);
 }
 
-// Запуск GUI во всех активных сессиях (кроме сессии 0)
+// Запуск GUI во всех активных пользовательских сессиях (кроме сессии 0)
 void LaunchGuiInAllSessions() {
     WTS_SESSION_INFOW* pSessionInfo = NULL;
     DWORD sessionCount = 0;
@@ -127,10 +136,10 @@ void LaunchGuiInAllSessions() {
     }
 }
 
-// БОНУС 1: Запрос подтверждения на Secure Desktop (экране входа/блокировки)
+// БОНУС 1: Запрос подтверждения на Secure Desktop (экране Winlogon)
 bool AskConfirmationOnSecureDesktop(DWORD sessionId) {
     HANDLE hToken = NULL;
-    if (!WTSQueryUserToken(sessionId, &hToken)) return true; // Если токен не взять, разрешаем по умолчанию
+    if (!WTSQueryUserToken(sessionId, &hToken)) return true; // Разрешаем закрытие, если токен недоступен
 
     HANDLE hDuplicatedToken = NULL;
     DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, NULL, SecurityIdentification, TokenPrimary, &hDuplicatedToken);
@@ -148,10 +157,10 @@ bool AskConfirmationOnSecureDesktop(DWORD sessionId) {
 
     STARTUPINFOW si = {};
     si.cb = sizeof(si);
-    si.lpDesktop = (LPWSTR)L"Winsta0\\Winlogon"; // Запуск строго на Secure Desktop!
+    si.lpDesktop = (LPWSTR)L"Winsta0\\Winlogon"; // Запуск строго на защищенном столе входа в систему!
 
     PROCESS_INFORMATION pi = {};
-    std::wstring cmd = guiPath + L" --secure-prompt";
+    std::wstring cmd = guiPath + L" --secure-prompt"; // Запускаем GUI в режиме запроса
 
     BOOL success = CreateProcessAsUserW(
         hDuplicatedToken,
@@ -168,35 +177,37 @@ bool AskConfirmationOnSecureDesktop(DWORD sessionId) {
         GetExitCodeProcess(pi.hProcess, &exitCode);
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        confirmed = (exitCode == IDYES); // IDYES = 6
+        confirmed = (exitCode == IDYES); // Пользователь нажал "Да"
     } else {
-        confirmed = true; // Если не смогли запустить, разрешаем выход
+        confirmed = true; // Запасной вариант: если запуск не удался, разрешаем
     }
 
     CloseHandle(hDuplicatedToken);
     return confirmed;
 }
 
-// Завершение всех запущенных GUI процессов при остановке службы
+// Требование 6: Завершение всех запущенных GUI процессов при остановке службы
 void TerminateAllGuiProcesses() {
     std::lock_guard<std::mutex> lock(g_ProcessesMutex);
     for (HANDLE hProcess : g_ActiveGuiHandles) {
-        // Чтобы остановить процесс, мы временно сбросим DACL, который сами же установили
+        // Перед закрытием сбросим защитный DACL, чтобы операционная система разрешила закрыть процесс
         SetSecurityInfo(hProcess, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, NULL, NULL);
-        TerminateProcess(hProcess, 0); // Требование 6: Завершить все GUI
+        TerminateProcess(hProcess, 0); 
         CloseHandle(hProcess);
     }
     g_ActiveGuiHandles.clear();
 }
 
-// Реализация RPC интерфейса остановки службы
-long StopAntivirusService() {
+// --- Реализация RPC контракта ---
+
+// Реализация RPC интерфейса остановки службы (с Явным связыванием)
+long StopAntivirusService(handle_t hBinding) {
     DWORD activeSessionId = WTSGetActiveConsoleSessionId();
     
     // БОНУС 1: Спрашиваем подтверждение на Secure Desktop активного пользователя
     if (AskConfirmationOnSecureDesktop(activeSessionId)) {
-        RpcMgmtStopServerListening(NULL); // Останавливаем сервер RPC
-        return 1; // Успешно остановлено
+        RpcMgmtStopServerListening(NULL); // Завершаем прослушивание RPC (это разблокирует поток службы)
+        return 1; // Остановлено
     }
     return 0; // Отклонено пользователем
 }
@@ -205,7 +216,9 @@ long StopAntivirusService() {
 void* __RPC_USER midl_user_allocate(size_t size) { return malloc(size); }
 void __RPC_USER midl_user_free(void* ptr) { free(ptr); }
 
-// Обработчик сигналов службы
+// --- Логика службы Windows ---
+
+// Обработчик сигналов управления от Windows
 DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD dwEventType, LPVOID lpEventData, LPVOID lpContext) {
     switch (dwControl) {
         // Требование 2: Отслеживание входа новых пользователей
@@ -223,22 +236,22 @@ DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD dwEventType, LPVOID lpEve
     return NO_ERROR;
 }
 
-// Главный поток службы
+// Главный поток нашей службы
 void WINAPI ServiceMain(DWORD dwArgc, LPTSTR* lpszArgv) {
-    // Требование 3: Отключаем обработку Stop и Shutdown на уровне SCM
-    // Мы регистрируем обработчик, но НЕ возвращаем флаги SERVICE_ACCEPT_STOP и SERVICE_ACCEPT_SHUTDOWN
+    // Требование 3: Отключаем обработку Stop и Shutdown на уровне Windows SCM.
+    // Мы регистрируемся, но в dwControlsAccepted передаем только SERVICE_ACCEPT_SESSION_CHANGE.
     g_StatusHandle = RegisterServiceCtrlHandlerExW(SERVICE_NAME, ServiceCtrlHandler, NULL);
     if (!g_StatusHandle) return;
 
     SERVICE_STATUS status = {};
     status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     status.dwCurrentState = SERVICE_START_PENDING;
-    status.dwControlsAccepted = SERVICE_ACCEPT_SESSION_CHANGE; // Принимаем только смену сессий!
+    status.dwControlsAccepted = SERVICE_ACCEPT_SESSION_CHANGE; // Принимаем только смену сессий
     SetServiceStatus(g_StatusHandle, &status);
 
     g_ServiceStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
 
-    // БОНУС 4: Защищаем саму службу от принудительного закрытия кем угодно
+    // БОНУС 4: Защищаем саму службу от принудительного завершения извне (даже администратором)
     ProtectProcessFromTermination(GetCurrentProcess());
 
     status.dwCurrentState = SERVICE_RUNNING;
@@ -251,14 +264,14 @@ void WINAPI ServiceMain(DWORD dwArgc, LPTSTR* lpszArgv) {
     RpcServerUseProtseqEpW((RPC_WSTR)L"ncalrpc", RPC_C_PROTSEQ_MAX_REQS_DEFAULT, (RPC_WSTR)L"AntivirusRpcEndpoint", NULL);
     RpcServerRegisterIf(AntivirusRpc_v1_0_s_ifspec, NULL, NULL); // Регистрация интерфейса
     
-    // Служба висит здесь и обрабатывает RPC-запросы до тех пор, пока сервер не остановят
+    // Поток блокируется здесь и ждет RPC вызова
     RpcServerListen(1, RPC_C_LISTEN_MAX_CALLS_DEFAULT, FALSE);
 
-    // Началась остановка службы
+    // Сюда мы попадем только после вызова StopAntivirusService() из GUI
     status.dwCurrentState = SERVICE_STOP_PENDING;
     SetServiceStatus(g_StatusHandle, &status);
 
-    // Требование 6: Завершаем все запущенные нами графические приложения
+    // Требование 6: Перед выходом завершаем все запущенные нами графические приложения
     TerminateAllGuiProcesses();
 
     CloseHandle(g_ServiceStopEvent);

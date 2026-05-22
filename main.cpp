@@ -3,6 +3,10 @@
 #include <windows.h>
 #undef GetCurrentTime // КРИТИЧНО: чтобы избежать конфликтов времени Win32 и WinRT!
 #include <shellapi.h>
+#include <tlhelp32.h>
+#include <winsvc.h>
+#include <string>
+#include <vector>
 
 // WinRT и WinUI 3.0 заголовки
 #include <winrt/Windows.Foundation.h>
@@ -18,8 +22,11 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
-#include <winrt/Microsoft.UI.Xaml.Media.h>       // КРИТИЧНО: Для работы с цветами и кистями (SolidColorBrush)
+#include <winrt/Microsoft.UI.Xaml.Media.h>       // КРИТИЧНО: Для работы с цветами и кистями
 #include <microsoft.ui.xaml.window.h>
+
+// Подключаем сгенерированный MIDL заголовок RPC
+#include "AntivirusRpc_h.h"
 
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001
@@ -34,14 +41,140 @@ using namespace Microsoft::UI::Xaml::Markup;
 using namespace Windows::UI::Xaml::Interop;
 using namespace Microsoft::UI::Xaml::Media;
 
-// Глобальные переменные (состояния)
+// Глобальные переменные
 HWND g_hwndHidden = NULL;
 NOTIFYICONDATAW g_nid = {};
 UINT g_taskbarRestartMsg = 0;
 winrt::Microsoft::UI::Windowing::AppWindow g_appWindow{ nullptr };
 winrt::Microsoft::UI::Xaml::Window g_xamlWindow{ nullptr };
+const wchar_t* SERVICE_NAME = L"MyAntivirusService";
 
-// Объявления функций
+// Обязательные функции аллокации памяти для RPC
+void* __RPC_USER midl_user_allocate(size_t size) { return malloc(size); }
+void __RPC_USER midl_user_free(void* ptr) { free(ptr); }
+
+// --- Вспомогательные системные проверки ---
+
+// Получаем PID родительского процесса
+DWORD GetParentPid() {
+    DWORD currentPid = GetCurrentProcessId();
+    DWORD parentPid = 0;
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W pe = {};
+        pe.dwSize = sizeof(pe);
+        if (Process32FirstW(hSnapshot, &pe)) {
+            do {
+                if (pe.th32ProcessID == currentPid) {
+                    parentPid = pe.th32ParentProcessID;
+                    break;
+                }
+            } while (Process32NextW(hSnapshot, &pe));
+        }
+        CloseHandle(hSnapshot);
+    }
+    return parentPid;
+}
+
+// Получаем PID нашей службы
+DWORD GetServicePid() {
+    DWORD pid = 0;
+    SC_HANDLE hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (hSCM) {
+        SC_HANDLE hService = OpenServiceW(hSCM, SERVICE_NAME, SERVICE_QUERY_STATUS);
+        if (hService) {
+            DWORD bytesNeeded = 0;
+            QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, NULL, 0, &bytesNeeded);
+            if (GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
+                std::vector<BYTE> buffer(bytesNeeded);
+                LPSERVICE_STATUS_PROCESS pStatus = (LPSERVICE_STATUS_PROCESS)buffer.data();
+                if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)pStatus, bytesNeeded, &bytesNeeded)) {
+                    pid = pStatus->dwProcessId;
+                }
+            }
+            CloseHandle(hService);
+        }
+        CloseHandle(hSCM);
+    }
+    return pid;
+}
+
+// Проверка: запущена ли служба прямо сейчас
+bool IsServiceRunning() {
+    bool running = false;
+    SC_HANDLE hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (hSCM) {
+        SC_HANDLE hService = OpenServiceW(hSCM, SERVICE_NAME, SERVICE_QUERY_STATUS);
+        if (hService) {
+            SERVICE_STATUS_PROCESS status = {};
+            DWORD bytesNeeded = 0;
+            if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(status), &bytesNeeded)) {
+                running = (status.dwCurrentState == SERVICE_RUNNING);
+            }
+            CloseHandle(hService);
+        }
+        CloseHandle(hSCM);
+    }
+    return running;
+}
+
+// Требование 1 GUI: Запуск службы и ожидание состояния RUNNING
+bool StartAntivirusService() {
+    SC_HANDLE hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT | SC_MANAGER_ALL_ACCESS);
+    if (!hSCM) return false;
+
+    SC_HANDLE hService = OpenServiceW(hSCM, SERVICE_NAME, SERVICE_START | SERVICE_QUERY_STATUS);
+    if (!hService) {
+        CloseHandle(hSCM);
+        return false;
+    }
+
+    BOOL success = StartServiceW(hService, 0, NULL);
+    if (success || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING) {
+        // Ожидаем статус RUNNING
+        SERVICE_STATUS_PROCESS status = {};
+        DWORD bytesNeeded = 0;
+        for (int i = 0; i < 30; ++i) { // Ждем максимум 15 секунд
+            if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(status), &bytesNeeded)) {
+                if (status.dwCurrentState == SERVICE_RUNNING) {
+                    CloseHandle(hService);
+                    CloseHandle(hSCM);
+                    return true;
+                }
+            }
+            Sleep(500);
+        }
+    }
+
+    CloseHandle(hService);
+    CloseHandle(hSCM);
+    return false;
+}
+
+// Вызов RPC сервера для плавной остановки службы (с явным связыванием!)
+void RequestServiceStop() {
+    RPC_WSTR pszStringBinding = NULL;
+    // Требование 4 и 5: Подключаемся к RPC ALPC (ncalrpc)
+    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL, (RPC_WSTR)L"AntivirusRpcEndpoint", NULL, &pszStringBinding) == RPC_S_OK) {
+        RPC_BINDING_HANDLE hBinding = NULL;
+        if (RpcBindingFromStringBindingW(pszStringBinding, &hBinding) == RPC_S_OK) {
+            
+            // Вызываем удаленную функцию, передавая дескриптор связи
+            RpcTryExcept {
+                StopAntivirusService(hBinding); // Передаем хэндл явно
+            }
+            RpcExcept(1) {
+                // Если служба уже мертва или RPC недоступен
+            }
+            RpcEndExcept
+
+            RpcBindingFree(&hBinding);
+        }
+        RpcStringFreeW(&pszStringBinding);
+    }
+}
+
+// Опережающие объявления функций UI
 void AddTrayIcon(HWND hwnd);
 void RemoveTrayIcon();
 void ShowMainWindow();
@@ -49,7 +182,6 @@ void ExitApp();
 void ShowContextMenu(HWND hwnd);
 LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-// --- КЛАСС ПРИЛОЖЕНИЯ WinUI 3 ---
 struct App : public ApplicationT<App, IXamlMetadataProvider>
 {
     void OnLaunched(LaunchActivatedEventArgs const&)
@@ -59,105 +191,88 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
         g_xamlWindow = Window();
         g_xamlWindow.Title(L"Антивирус (Главное окно)");
 
-        // 1. Создаем верхнее меню "Файл -> Выход"
+        // Меню "Файл -> Выход"
         MenuBar menuBar;
         MenuBarItem fileMenu;
         fileMenu.Title(L"Файл");
         MenuFlyoutItem exitItem;
         exitItem.Text(L"Выход");
-        exitItem.Click([&](auto&&, auto&&) { ExitApp(); });
+        exitItem.Click([&](auto&&, auto&&) { 
+            RequestServiceStop(); // Требование 3 GUI: Клик по меню останавливает службу
+        });
         fileMenu.Items().Append(exitItem);
         menuBar.Items().Append(fileMenu);
 
-        // 2. Создаем центральную информационную карточку
         Border card;
         card.Background(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 32, 32, 32)));
-        card.CornerRadius(CornerRadius{12}); // Закругляем углы карточки
+        card.CornerRadius(CornerRadius{12});
         card.Padding({40, 40, 40, 40});
         card.Width(480);
         card.HorizontalAlignment(HorizontalAlignment::Center);
         card.VerticalAlignment(VerticalAlignment::Center);
 
-        // Стопка элементов внутри карточки
         StackPanel cardContent;
         cardContent.Spacing(18);
 
-        // Огромная иконка щита с галочкой
         FontIcon shieldIcon;
         shieldIcon.Glyph(L"\uF13C");
         shieldIcon.FontSize(80);
         shieldIcon.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 16, 124, 65)));
 
-        // Крупный жирный заголовок статуса
         TextBlock titleText;
         titleText.Text(L"Компьютер защищен");
         titleText.FontSize(24);
         titleText.FontWeight(Windows::UI::Text::FontWeights::Bold());
         titleText.HorizontalAlignment(HorizontalAlignment::Center);
 
-        // Описание состояния системы
         TextBlock subText;
-        subText.Text(L"Активная защита включена. Угроз безопасности не обнаружено.");
+        subText.Text(L"Защита работает под управлением системной службы.");
         subText.FontSize(13);
         subText.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 180, 180, 180)));
         subText.HorizontalAlignment(HorizontalAlignment::Center);
         subText.TextAlignment(TextAlignment::Center);
         subText.TextWrapping(TextWrapping::Wrap);
 
-        // Собираем карточку (без кнопки сканирования)
         cardContent.Children().Append(shieldIcon);
         cardContent.Children().Append(titleText);
         cardContent.Children().Append(subText);
         card.Child(cardContent);
 
-        // 3. Создаем сетку (Grid) для всего окна
         Grid rootLayout;
         RowDefinition r1, r2;
-        r1.Height(GridLength{0, GridUnitType::Auto}); // Строка под меню
-        r2.Height(GridLength{1, GridUnitType::Star}); // Строка под рабочую область (занимает всё пространство)
+        r1.Height(GridLength{0, GridUnitType::Auto});
+        r2.Height(GridLength{1, GridUnitType::Star});
         rootLayout.RowDefinitions().Append(r1);
         rootLayout.RowDefinitions().Append(r2);
 
-        // Кладём меню в верхнюю строчку
         rootLayout.Children().Append(menuBar);
         Grid::SetRow(menuBar, 0);
 
-        // Кладём карточку в центральную рабочую область
         rootLayout.Children().Append(card);
         Grid::SetRow(card, 1);
 
         g_xamlWindow.Content(rootLayout);
 
-        // Получаем доступ к системному управлению окном WinUI
         auto windowNative = g_xamlWindow.as<IWindowNative>();
         HWND hwnd{0};
         windowNative->get_WindowHandle(&hwnd);
         auto windowId = Microsoft::UI::GetWindowIdFromWindow(hwnd);
         g_appWindow = Microsoft::UI::Windowing::AppWindow::GetFromWindowId(windowId);
 
-        // При закрытии прячем окно, но продолжаем работу
         g_appWindow.Closing([&](auto&& sender, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& args) {
-            args.Cancel(true); // Отменяем полное закрытие
-            sender.Hide();     // Прячем окно
+            args.Cancel(true);
+            sender.Hide();
         });
     }
 
-    // Реализация обязательных методов интерфейса IXamlMetadataProvider
-    IXamlType GetXamlType(TypeName const& type) {
-        return m_provider.GetXamlType(type);
-    }
-    IXamlType GetXamlType(hstring const& fullname) {
-        return m_provider.GetXamlType(fullname);
-    }
-    com_array<XmlnsDefinition> GetXmlnsDefinitions() {
-        return m_provider.GetXmlnsDefinitions();
-    }
+    IXamlType GetXamlType(TypeName const& type) { return m_provider.GetXamlType(type); }
+    IXamlType GetXamlType(hstring const& fullname) { return m_provider.GetXamlType(fullname); }
+    com_array<XmlnsDefinition> GetXmlnsDefinitions() { return m_provider.GetXmlnsDefinitions(); }
 
 private:
     XamlControlsXamlMetaDataProvider m_provider;
 };
 
-// --- ФУНКЦИИ WIN32 ДЛЯ ТРЕЯ ---
 void AddTrayIcon(HWND hwnd) {
     g_nid.cbSize = sizeof(NOTIFYICONDATAW);
     g_nid.hWnd = hwnd;
@@ -169,9 +284,7 @@ void AddTrayIcon(HWND hwnd) {
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 }
 
-void RemoveTrayIcon() {
-    Shell_NotifyIconW(NIM_DELETE, &g_nid);
-}
+void RemoveTrayIcon() { Shell_NotifyIconW(NIM_DELETE, &g_nid); }
 
 void ShowMainWindow() {
     if (g_xamlWindow && g_appWindow) {
@@ -201,7 +314,6 @@ void ShowContextMenu(HWND hwnd) {
     DestroyMenu(hMenu);
 }
 
-// Обработчик скрытого окна, принимающий сообщения от трея
 LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (uMsg == g_taskbarRestartMsg) {
         AddTrayIcon(hwnd);
@@ -219,7 +331,7 @@ LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             if (LOWORD(wParam) == ID_TRAY_OPEN) {
                 ShowMainWindow();
             } else if (LOWORD(wParam) == ID_TRAY_EXIT) {
-                ExitApp();
+                RequestServiceStop(); // Требование 4 GUI: Выход из трея останавливает службу
             }
             return 0;
         case WM_DESTROY:
@@ -229,18 +341,39 @@ LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
-// --- ТОЧКА ВХОДА ---
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
+    // БОНУС 1: Обработчик запроса на Secure Desktop
+    if (wcsstr(pCmdLine, L"--secure-prompt")) {
+        int res = MessageBoxW(NULL, 
+            L"Вы действительно хотите остановить службу Антивируса?\nЭто сделает компьютер уязвимым.", 
+            L"Запрос безопасности антивируса", 
+            MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+        return res; // Вернет IDYES (6) или IDNO (7)
+    }
+
+    // Требование 1 GUI: Проверка состояния службы при старте
+    if (!IsServiceRunning()) {
+        StartAntivirusService(); // Запускаем, ждем и завершаем работу
+        return 0; 
+    }
+
+    // Требование 2 GUI: Проверка родительского процесса
+    // Мы ДОЛЖНЫ быть запущены исключительно нашей системной службой
+    DWORD parentPid = GetParentPid();
+    DWORD servicePid = GetServicePid();
+    if (parentPid == 0 || servicePid == 0 || parentPid != servicePid) {
+        // Если родитель не служба - молча выходим
+        return 0;
+    }
+
     // Защита от повторного запуска (Мьютекс)
     HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\MyAntivirusSingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(NULL, L"Антивирус уже запущен!", L"Ошибка", MB_ICONWARNING | MB_OK);
         return 0;
     }
 
     g_taskbarRestartMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
-    // Создаем невидимое окно Win32.
     const wchar_t CLASS_NAME[] = L"HiddenTrayClass";
     WNDCLASSW wc = {};
     wc.lpfnWndProc = HiddenWindowProc;
@@ -251,7 +384,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     g_hwndHidden = CreateWindowExW(0, CLASS_NAME, L"Tray Window", WS_OVERLAPPEDWINDOW, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
     AddTrayIcon(g_hwndHidden);
 
-    // Запускаем современное WinUI 3 приложение
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     Application::Start([](auto&&) {
         ::winrt::make<App>();

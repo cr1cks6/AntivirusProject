@@ -20,6 +20,7 @@ add_custom_command(
 # Разрешаем компилятору видеть сгенерированные MIDL-файлы
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
+
 # --- ЦЕЛЬ 1: Графическое приложение ---
 add_executable(Antivirus WIN32 main.cpp app.manifest "${RPC_CLIENT}" "${RPC_HEADER}")
 
@@ -44,16 +45,21 @@ if(MSVC)
     target_compile_options(Antivirus PRIVATE "/utf-8")
 endif()
 
-# Подключаем библиотеки RPC и WTS для графического приложения
 target_link_libraries(Antivirus PRIVATE shell32.lib user32.lib rpcrt4.lib wtsapi32.lib advapi32.lib)
 
 
 # --- ЦЕЛЬ 2: Системная служба ---
 add_executable(AntivirusService service.cpp "${RPC_SERVER}" "${RPC_HEADER}")
 
+# КРИТИЧНО: Применяем те же свойства нативной платформы, чтобы убрать ошибку NuGet "Sequence contains no elements"
+set_target_properties(AntivirusService PROPERTIES
+    VS_GLOBAL_NuGetTargetMoniker "native,Version=v0.0"
+    VS_GLOBAL_TargetFrameworkMoniker "native,Version=v0.0"
+    VS_GLOBAL_RuntimeIdentifiers "win;win-x86;win-x64;win-arm;win-arm64"
+)
+
 if(MSVC)
     target_compile_options(AntivirusService PRIVATE "/utf-8")
 endif()
 
-# Службе нужны библиотеки RPC, WTS (для сессий) и Advapi32 (для DACL)
 target_link_libraries(AntivirusService PRIVATE rpcrt4.lib wtsapi32.lib advapi32.lib user32.lib)

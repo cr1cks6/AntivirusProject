@@ -1,9 +1,9 @@
 [
     uuid(8a83a005-7286-42d4-ba5f-22a4d7d9a1c1),
-    version(1.0),
-    implicit_handle(handle_t hAntivirusBinding)
+    version(1.0)
 ]
 interface AntivirusRpc
 {
-    long StopAntivirusService();
+    // Передаем дескриптор связи [in] handle_t hBinding явно в функцию
+    long StopAntivirusService([in] handle_t hBinding);
 }

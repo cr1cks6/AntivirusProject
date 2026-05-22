@@ -4,12 +4,12 @@ stages:
 build-windows:
   stage: build
   tags:
-    - saas-windows-medium-amd64 # Указываем GitLab использовать сервер на Windows
+    - saas-windows-medium-amd64
   script:
     - cmake -B build -G "Visual Studio 17 2022" -A x64
-    - cmake --build build --config Release
+    - cmake --build build --config Release -- /restore
   artifacts:
     name: "Antivirus-Executable-WinUI3"
     paths:
-      - build/Release/Antivirus.exe
+      - build/Release/
     expire_in: 1 week

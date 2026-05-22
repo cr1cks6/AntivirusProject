@@ -24,4 +24,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Antivirus-Executable-WinUI3
-        path: build/Release/Antivirus.exe
+        path: build/Release/

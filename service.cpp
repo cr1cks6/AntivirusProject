@@ -1,3 +1,5 @@
+#define _WIN32_WINNT 0x0A00  // КРИТИЧНО: Явно объявляем поддержку Windows 10/11 в самом верху
+#define WINVER 0x0A00
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -32,7 +34,7 @@ void ProtectProcessFromTermination(HANDLE hProcess) {
     PSID pUserSid = NULL;
     SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
     
-    // ИСПРАВЛЕНО: Используем корректные макросы RID (Relative Identifier) вместо REGS
+    // Используем корректные макросы RID (Relative Identifier) вместо REGS
     AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &pAdminSid);
     AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS, 0, 0, 0, 0, 0, 0, &pUserSid);
 
@@ -225,7 +227,6 @@ DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD dwEventType, LPVOID lpEve
 }
 
 // Главный поток нашей службы
-// ИСПРАВЛЕНО: Явно указываем LPWSTR* для полного соответствия системному типу LPSERVICE_MAIN_FUNCTIONW
 void WINAPI ServiceMain(DWORD dwArgc, LPWSTR* lpszArgv) {
     g_StatusHandle = RegisterServiceCtrlHandlerExW(SERVICE_NAME, ServiceCtrlHandler, NULL);
     if (!g_StatusHandle) return;

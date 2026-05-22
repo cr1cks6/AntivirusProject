@@ -1,3 +1,5 @@
+#define _WIN32_WINNT 0x0A00  // КРИТИЧНО: Явно объявляем поддержку Windows 10/11 в самом верху
+#define WINVER 0x0A00
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -23,10 +25,16 @@
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>       // КРИТИЧНО: Для работы с цветами и кистями
-#include <microsoft.ui.xaml.window.h>
 
 // Подключаем сгенерированный MIDL заголовок RPC
 #include "AntivirusRpc_h.h"
+
+// КРИТИЧНО: Объявляем COM-интерфейс IWindowNative вручную.
+// Это избавляет от багов подключения microsoft.ui.xaml.window.h
+struct __declspec(uuid("E352E75C-1FC2-418F-A1AD-E162464790E5")) IWindowNative : ::IUnknown
+{
+    virtual HRESULT __stdcall get_WindowHandle(HWND* hWnd) = 0;
+};
 
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001

@@ -12,7 +12,7 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Configure CMake
       run: cmake -B build -G "Visual Studio 17 2022" -A x64
@@ -21,7 +21,7 @@ jobs:
       run: cmake --build build --config Release -- /restore
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: Antivirus-Executable-WinUI3
         path: build/Release/Antivirus.exe

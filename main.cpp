@@ -1,17 +1,21 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#undef GetCurrentTime // КРИТИЧНО: чтобы избежать конфликтов времени Win32 и WinRT!
 #include <shellapi.h>
 
 // WinRT и WinUI 3.0 заголовки
 #include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Foundation.Collections.h> // КРИТИЧНО: Чтобы компилятор знал, как работает Append()!
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.Xaml.Interop.h>       // КРИТИЧНО: Для типов метаданных
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h> // КРИТИЧНО: Провайдер метаданных
+#include <winrt/Microsoft.UI.Xaml.Markup.h>       // КРИТИЧНО: Для интерфейса IXamlMetadataProvider
 #include <microsoft.ui.xaml.window.h>
 
 #define WM_TRAYICON (WM_USER + 1)
@@ -22,6 +26,9 @@
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
+using namespace Microsoft::UI::Xaml::XamlTypeInfo;
+using namespace Microsoft::UI::Xaml::Markup;
+using namespace Windows::UI::Xaml::Interop;
 
 // Глобальные переменные (состояния)
 HWND g_hwndHidden = NULL;
@@ -39,10 +46,15 @@ void ShowContextMenu(HWND hwnd);
 LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 // --- КЛАСС ПРИЛОЖЕНИЯ WinUI 3 ---
-struct App : ApplicationT<App>
+// Мы наследуемся от IXamlMetadataProvider, чтобы XAML-движок мог работать без .xaml файлов
+struct App : public ApplicationT<App, IXamlMetadataProvider>
 {
     void OnLaunched(LaunchActivatedEventArgs const&)
     {
+        // КРИТИЧЕСКИЙ СУПЕР-ФИКС: Программно загружаем все стандартные стили WinUI 3.0!
+        // Без этого приложения без XAML гарантированно падают при попытке создать любой элемент.
+        Resources().MergedDictionaries().Append(XamlControlsResources());
+
         g_xamlWindow = Window();
         g_xamlWindow.Title(L"Антивирус (Главное окно)");
 
@@ -79,6 +91,20 @@ struct App : ApplicationT<App>
             sender.Hide();     // Прячем окно
         });
     }
+
+    // Реализация обязательных методов интерфейса IXamlMetadataProvider
+    IXamlType GetXamlType(TypeName const& type) {
+        return m_provider.GetXamlType(type);
+    }
+    IXamlType GetXamlType(hstring const& fullname) {
+        return m_provider.GetXamlType(fullname);
+    }
+    com_array<XmlnsDefinition> GetXmlnsDefinitions() {
+        return m_provider.GetXmlnsDefinitions();
+    }
+
+private:
+    XamlControlsXamlMetaDataProvider m_provider; // Локальный провайдер стилей и типов
 };
 
 // --- ФУНКЦИИ WIN32 ДЛЯ ТРЕЯ ---
@@ -175,7 +201,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     g_hwndHidden = CreateWindowExW(0, CLASS_NAME, L"Tray Window", WS_OVERLAPPEDWINDOW, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
     AddTrayIcon(g_hwndHidden);
 
-    // Запускаем современное WinUI 3 приложение (локальный активатор сам всё подгрузит!)
+    // Запускаем современное WinUI 3 приложение
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     Application::Start([](auto&&) {
         ::winrt::make<App>();

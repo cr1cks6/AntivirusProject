@@ -20,11 +20,13 @@ set_property(TARGET Antivirus PROPERTY VS_GLOBAL_Platform "x64")
 # Указываем, что наше приложение "Распакованное" (Unpackaged)
 set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsPackageType "None")
 
-# --- КРИТИЧЕСКИЙ ФИКС: ДЕЛАЕМ ПРИЛОЖЕНИЕ ПОЛНОСТЬЮ АВТОНОМНЫМ (Self-Contained) ---
-# Копируем абсолютно все системные DLL рантайма WinUI 3.0 прямо в нашу папку сборки.
-# Программа будет запускаться на любом ПК БЕЗ установки каких-либо внешних библиотек!
+# --- СУПЕР-ФИКС: ДЕЛАЕМ ПРИЛОЖЕНИЕ ПОЛНОСТЬЮ АВТОНОМНЫМ (Self-Contained) ---
 set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsAppSDKSelfContained "true")
 set_property(TARGET Antivirus PROPERTY VS_GLOBAL_SelfContained "true")
+
+# --- ОТКЛЮЧАЕМ СЛОМАННЫЙ АВТО-ИНИЦИАЛИЗАТОР MICROSOFT ---
+# Это не даст сработать скрытому коду до запуска нашей функции wWinMain!
+set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsAppSDKBootstrapAutoInitialize "false")
 
 # --- ИСПРАВЛЕНИЕ БАГА VS2022 "Sequence contains no elements" ---
 set_target_properties(Antivirus PROPERTIES

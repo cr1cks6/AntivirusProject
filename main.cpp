@@ -171,7 +171,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         0x00010005, 
         L"", 
         PACKAGE_VERSION{}, 
-        MddBootstrapInitializeOptions_OnNoMatch_ShowUI
+        MddBootstrapInitializeOptions_None
     );
     if (FAILED(hr)) {
         ReleaseMutex(hMutex);

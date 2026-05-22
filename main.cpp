@@ -3,6 +3,7 @@
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <unknwn.h>          // КРИТИЧНО: Чтобы компилятор точно знал базовый класс IUnknown!
 #undef GetCurrentTime // КРИТИЧНО: чтобы избежать конфликтов времени Win32 и WinRT!
 #include <shellapi.h>
 #include <tlhelp32.h>
@@ -30,7 +31,6 @@
 #include "AntivirusRpc_h.h"
 
 // КРИТИЧНО: Объявляем COM-интерфейс IWindowNative вручную.
-// Это избавляет от багов подключения microsoft.ui.xaml.window.h
 struct __declspec(uuid("E352E75C-1FC2-418F-A1AD-E162464790E5")) IWindowNative : ::IUnknown
 {
     virtual HRESULT __stdcall get_WindowHandle(HWND* hWnd) = 0;
@@ -261,7 +261,10 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
 
         g_xamlWindow.Content(rootLayout);
 
-        auto windowNative = g_xamlWindow.as<IWindowNative>();
+        // ИСПРАВЛЕНО: Безопасный вызов QueryInterface через com_ptr для классического COM
+        winrt::com_ptr<::IWindowNative> windowNative;
+        g_xamlWindow.as(windowNative);
+        
         HWND hwnd{0};
         windowNative->get_WindowHandle(&hwnd);
         auto windowId = Microsoft::UI::GetWindowIdFromWindow(hwnd);

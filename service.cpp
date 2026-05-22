@@ -16,6 +16,15 @@
 // Подключаем сгенерированный MIDL заголовок RPC
 #include "AntivirusRpc_h.h"
 
+// КРИТИЧЕСКИЙ ФОРС-МАЖОРНЫЙ ФИКС: Объявляем макросы сессий вручную,
+// чтобы полностью обезопасить компилятор на серверах сборки от багов SDK!
+#ifndef SERVICE_CONTROL_SESSION_CHANGE
+#define SERVICE_CONTROL_SESSION_CHANGE 0x0000000E
+#endif
+#ifndef SERVICE_ACCEPT_SESSION_CHANGE
+#define SERVICE_ACCEPT_SESSION_CHANGE 0x00000080
+#endif
+
 // Подключаем библиотеку работы с профилями пользователей
 #pragma comment(lib, "userenv.lib")
 

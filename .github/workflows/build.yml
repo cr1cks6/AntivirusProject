@@ -2,7 +2,7 @@ name: Build Antivirus (WinUI 3 + Service)
 
 on:
   push:
-    branches: [ "main", "task-1-gui" ]
+    branches: [ "main", "task-1-gui", "task-2-service" ]
   pull_request:
     branches: [ "main" ]
 

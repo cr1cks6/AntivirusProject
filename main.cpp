@@ -1,15 +1,20 @@
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
+
+// WinRT и WinUI 3.0 заголовки
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h> // КРИТИЧНО: Чтобы компилятор знал, как работает Append()!
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <microsoft.ui.xaml.window.h>
-#include <MddBootstrap.h> // Bootstrapper для WinUI 3
+#include <MddBootstrap.h> // Загрузчик Windows App SDK
 
-// Идентификаторы для трея
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_OPEN 1002
@@ -32,6 +37,7 @@ void RemoveTrayIcon();
 void ShowMainWindow();
 void ExitApp();
 void ShowContextMenu(HWND hwnd);
+LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 // --- КЛАСС ПРИЛОЖЕНИЯ WinUI 3 ---
 struct App : ApplicationT<App>
@@ -41,7 +47,7 @@ struct App : ApplicationT<App>
         g_xamlWindow = Window();
         g_xamlWindow.Title(L"Антивирус (Главное окно)");
 
-        // Требование 9: Меню главного окна "Файл -> Выход"
+        // Меню главного окна "Файл -> Выход"
         MenuBar menuBar;
         MenuBarItem fileMenu;
         fileMenu.Title(L"Файл");
@@ -68,14 +74,11 @@ struct App : ApplicationT<App>
         auto windowId = Microsoft::UI::GetWindowIdFromWindow(hwnd);
         g_appWindow = Microsoft::UI::Windowing::AppWindow::GetFromWindowId(windowId);
 
-        // Требование 8: При закрытии прячем окно, но продолжаем работу
+        // При закрытии прячем окно, но продолжаем работу
         g_appWindow.Closing([&](auto&& sender, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& args) {
             args.Cancel(true); // Отменяем полное закрытие
             sender.Hide();     // Прячем окно
         });
-
-        // Требование 7: Мы НЕ вызываем g_appWindow.Show() здесь, 
-        // поэтому при запуске окно не показывается, программа стартует скрытно в трее.
     }
 };
 
@@ -88,7 +91,7 @@ void AddTrayIcon(HWND hwnd) {
     g_nid.uCallbackMessage = WM_TRAYICON;
     g_nid.hIcon = LoadIcon(NULL, IDI_SHIELD);
     lstrcpyW(g_nid.szTip, L"Мой Антивирус");
-    Shell_NotifyIconW(NIM_ADD, &g_nid); // Требование 1
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
 }
 
 void RemoveTrayIcon() {
@@ -105,7 +108,7 @@ void ShowMainWindow() {
 void ExitApp() {
     RemoveTrayIcon();
     if (g_xamlWindow) {
-        Application::Current().Exit(); // Завершаем цикл WinUI 3
+        Application::Current().Exit();
     } else {
         PostQuitMessage(0);
     }
@@ -113,8 +116,8 @@ void ExitApp() {
 
 void ShowContextMenu(HWND hwnd) {
     HMENU hMenu = CreatePopupMenu();
-    InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_OPEN, L"Открыть"); // Требование 4
-    InsertMenuW(hMenu, 1, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"Выход");   // Требование 5
+    InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_OPEN, L"Открыть");
+    InsertMenuW(hMenu, 1, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"Выход");
 
     POINT pt;
     GetCursorPos(&pt);
@@ -125,7 +128,6 @@ void ShowContextMenu(HWND hwnd) {
 
 // Обработчик скрытого окна, принимающий сообщения от трея
 LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    // Требование 6: Пересоздание иконки при падении/перезапуске Проводника
     if (uMsg == g_taskbarRestartMsg) {
         AddTrayIcon(hwnd);
         return 0;
@@ -133,9 +135,9 @@ LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
     switch (uMsg) {
         case WM_TRAYICON:
             if (lParam == WM_LBUTTONUP) {
-                ShowMainWindow(); // Требование 2
+                ShowMainWindow();
             } else if (lParam == WM_RBUTTONUP) {
-                ShowContextMenu(hwnd); // Требование 3
+                ShowContextMenu(hwnd);
             }
             return 0;
         case WM_COMMAND:
@@ -154,15 +156,20 @@ LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 // --- ТОЧКА ВХОДА ---
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
-    // Требование 10: Защита от повторного запуска (Мьютекс)
+    // Защита от повторного запуска (Мьютекс)
     HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\MyAntivirusSingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBoxW(NULL, L"Антивирус уже запущен!", L"Ошибка", MB_ICONWARNING | MB_OK);
         return 0;
     }
 
-    // Инициализация среды Windows App SDK (нужно для работы WinUI 3 из .exe)
-    HRESULT hr = MddBootstrapInitialize2(0x00010005, L"", MIN_VERSION{0}, MddBootstrapInitializeOptions_OnNoMatch_ShowUI);
+    // Инициализация среды Windows App SDK (версия 1.5)
+    HRESULT hr = MddBootstrapInitialize2(
+        0x00010005, 
+        L"", 
+        PACKAGE_VERSION{}, // Исправлено: Используем PACKAGE_VERSION вместо MIN_VERSION
+        MddBootstrapInitializeOptions_OnNoMatch_ShowUI
+    );
     if (FAILED(hr)) {
         ReleaseMutex(hMutex);
         CloseHandle(hMutex);
@@ -171,7 +178,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
 
     g_taskbarRestartMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
-    // Создаем невидимое окно Win32. Оно нужно ТОЛЬКО чтобы ловить клики по трею.
+    // Создаем невидимое окно Win32.
     const wchar_t CLASS_NAME[] = L"HiddenTrayClass";
     WNDCLASSW wc = {};
     wc.lpfnWndProc = HiddenWindowProc;
@@ -179,17 +186,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     wc.lpszClassName = CLASS_NAME;
     RegisterClassW(&wc);
 
-    // Окно создается, но НЕ показывается (мы не вызываем ShowWindow)
     g_hwndHidden = CreateWindowExW(0, CLASS_NAME, L"Tray Window", WS_OVERLAPPEDWINDOW, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
     AddTrayIcon(g_hwndHidden);
 
     // Запускаем современное WinUI 3 приложение
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     Application::Start([](auto&&) {
-        ::winrt::make<App>(); // Цикл заблокируется здесь, пока мы не нажмем Выход
+        ::winrt::make<App>();
     });
 
-    // Очистка ресурсов после закрытия программы
     MddBootstrapShutdown();
     ReleaseMutex(hMutex);
     CloseHandle(hMutex);

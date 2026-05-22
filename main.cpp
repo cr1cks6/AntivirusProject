@@ -1,15 +1,26 @@
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#undef GetCurrentTime // КРИТИЧНО: чтобы избежать конфликтов времени Win32 и WinRT!
 #include <shellapi.h>
+
+// WinRT и WinUI 3.0 заголовки
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.UI.Xaml.Interop.h>
+#include <winrt/Windows.UI.Text.h>               // Для работы со шрифтами (Bold)
+#include <winrt/Windows.UI.h>                    // Для работы с цветами
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>       // КРИТИЧНО: Для работы с цветами и кистями (SolidColorBrush)
 #include <microsoft.ui.xaml.window.h>
-#include <MddBootstrap.h> // Bootstrapper для WinUI 3
 
-// Идентификаторы для трея
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001
 #define ID_TRAY_OPEN 1002
@@ -18,6 +29,10 @@
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
 using namespace Microsoft::UI::Xaml::Controls;
+using namespace Microsoft::UI::Xaml::XamlTypeInfo;
+using namespace Microsoft::UI::Xaml::Markup;
+using namespace Windows::UI::Xaml::Interop;
+using namespace Microsoft::UI::Xaml::Media;
 
 // Глобальные переменные (состояния)
 HWND g_hwndHidden = NULL;
@@ -32,16 +47,19 @@ void RemoveTrayIcon();
 void ShowMainWindow();
 void ExitApp();
 void ShowContextMenu(HWND hwnd);
+LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 // --- КЛАСС ПРИЛОЖЕНИЯ WinUI 3 ---
-struct App : ApplicationT<App>
+struct App : public ApplicationT<App, IXamlMetadataProvider>
 {
     void OnLaunched(LaunchActivatedEventArgs const&)
     {
+        Resources().MergedDictionaries().Append(XamlControlsResources());
+
         g_xamlWindow = Window();
         g_xamlWindow.Title(L"Антивирус (Главное окно)");
 
-        // Требование 9: Меню главного окна "Файл -> Выход"
+        // 1. Создаем верхнее меню "Файл -> Выход"
         MenuBar menuBar;
         MenuBarItem fileMenu;
         fileMenu.Title(L"Файл");
@@ -51,15 +69,64 @@ struct App : ApplicationT<App>
         fileMenu.Items().Append(exitItem);
         menuBar.Items().Append(fileMenu);
 
-        StackPanel panel;
-        panel.Children().Append(menuBar);
-        
-        TextBlock text;
-        text.Text(L"Антивирус работает в фоне. Это интерфейс WinUI 3.0!");
-        text.Margin({20, 20, 20, 20});
-        panel.Children().Append(text);
+        // 2. Создаем центральную информационную карточку
+        Border card;
+        card.Background(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 32, 32, 32)));
+        card.CornerRadius(CornerRadius{12}); // Закругляем углы карточки
+        card.Padding({40, 40, 40, 40});
+        card.Width(480);
+        card.HorizontalAlignment(HorizontalAlignment::Center);
+        card.VerticalAlignment(VerticalAlignment::Center);
 
-        g_xamlWindow.Content(panel);
+        // Стопка элементов внутри карточки
+        StackPanel cardContent;
+        cardContent.Spacing(18);
+
+        // Огромная иконка щита с галочкой
+        FontIcon shieldIcon;
+        shieldIcon.Glyph(L"\uF13C");
+        shieldIcon.FontSize(80);
+        shieldIcon.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 16, 124, 65)));
+
+        // Крупный жирный заголовок статуса
+        TextBlock titleText;
+        titleText.Text(L"Компьютер защищен");
+        titleText.FontSize(24);
+        titleText.FontWeight(Windows::UI::Text::FontWeights::Bold());
+        titleText.HorizontalAlignment(HorizontalAlignment::Center);
+
+        // Описание состояния системы
+        TextBlock subText;
+        subText.Text(L"Активная защита включена. Угроз безопасности не обнаружено.");
+        subText.FontSize(13);
+        subText.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 180, 180, 180)));
+        subText.HorizontalAlignment(HorizontalAlignment::Center);
+        subText.TextAlignment(TextAlignment::Center);
+        subText.TextWrapping(TextWrapping::Wrap);
+
+        // Собираем карточку (без кнопки сканирования)
+        cardContent.Children().Append(shieldIcon);
+        cardContent.Children().Append(titleText);
+        cardContent.Children().Append(subText);
+        card.Child(cardContent);
+
+        // 3. Создаем сетку (Grid) для всего окна
+        Grid rootLayout;
+        RowDefinition r1, r2;
+        r1.Height(GridLength{0, GridUnitType::Auto}); // Строка под меню
+        r2.Height(GridLength{1, GridUnitType::Star}); // Строка под рабочую область (занимает всё пространство)
+        rootLayout.RowDefinitions().Append(r1);
+        rootLayout.RowDefinitions().Append(r2);
+
+        // Кладём меню в верхнюю строчку
+        rootLayout.Children().Append(menuBar);
+        Grid::SetRow(menuBar, 0);
+
+        // Кладём карточку в центральную рабочую область
+        rootLayout.Children().Append(card);
+        Grid::SetRow(card, 1);
+
+        g_xamlWindow.Content(rootLayout);
 
         // Получаем доступ к системному управлению окном WinUI
         auto windowNative = g_xamlWindow.as<IWindowNative>();
@@ -68,15 +135,26 @@ struct App : ApplicationT<App>
         auto windowId = Microsoft::UI::GetWindowIdFromWindow(hwnd);
         g_appWindow = Microsoft::UI::Windowing::AppWindow::GetFromWindowId(windowId);
 
-        // Требование 8: При закрытии прячем окно, но продолжаем работу
+        // При закрытии прячем окно, но продолжаем работу
         g_appWindow.Closing([&](auto&& sender, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& args) {
             args.Cancel(true); // Отменяем полное закрытие
             sender.Hide();     // Прячем окно
         });
-
-        // Требование 7: Мы НЕ вызываем g_appWindow.Show() здесь, 
-        // поэтому при запуске окно не показывается, программа стартует скрытно в трее.
     }
+
+    // Реализация обязательных методов интерфейса IXamlMetadataProvider
+    IXamlType GetXamlType(TypeName const& type) {
+        return m_provider.GetXamlType(type);
+    }
+    IXamlType GetXamlType(hstring const& fullname) {
+        return m_provider.GetXamlType(fullname);
+    }
+    com_array<XmlnsDefinition> GetXmlnsDefinitions() {
+        return m_provider.GetXmlnsDefinitions();
+    }
+
+private:
+    XamlControlsXamlMetaDataProvider m_provider;
 };
 
 // --- ФУНКЦИИ WIN32 ДЛЯ ТРЕЯ ---
@@ -88,7 +166,7 @@ void AddTrayIcon(HWND hwnd) {
     g_nid.uCallbackMessage = WM_TRAYICON;
     g_nid.hIcon = LoadIcon(NULL, IDI_SHIELD);
     lstrcpyW(g_nid.szTip, L"Мой Антивирус");
-    Shell_NotifyIconW(NIM_ADD, &g_nid); // Требование 1
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
 }
 
 void RemoveTrayIcon() {
@@ -105,7 +183,7 @@ void ShowMainWindow() {
 void ExitApp() {
     RemoveTrayIcon();
     if (g_xamlWindow) {
-        Application::Current().Exit(); // Завершаем цикл WinUI 3
+        Application::Current().Exit();
     } else {
         PostQuitMessage(0);
     }
@@ -113,8 +191,8 @@ void ExitApp() {
 
 void ShowContextMenu(HWND hwnd) {
     HMENU hMenu = CreatePopupMenu();
-    InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_OPEN, L"Открыть"); // Требование 4
-    InsertMenuW(hMenu, 1, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"Выход");   // Требование 5
+    InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, ID_TRAY_OPEN, L"Открыть");
+    InsertMenuW(hMenu, 1, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, L"Выход");
 
     POINT pt;
     GetCursorPos(&pt);
@@ -125,7 +203,6 @@ void ShowContextMenu(HWND hwnd) {
 
 // Обработчик скрытого окна, принимающий сообщения от трея
 LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    // Требование 6: Пересоздание иконки при падении/перезапуске Проводника
     if (uMsg == g_taskbarRestartMsg) {
         AddTrayIcon(hwnd);
         return 0;
@@ -133,9 +210,9 @@ LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
     switch (uMsg) {
         case WM_TRAYICON:
             if (lParam == WM_LBUTTONUP) {
-                ShowMainWindow(); // Требование 2
+                ShowMainWindow();
             } else if (lParam == WM_RBUTTONUP) {
-                ShowContextMenu(hwnd); // Требование 3
+                ShowContextMenu(hwnd);
             }
             return 0;
         case WM_COMMAND:
@@ -154,24 +231,16 @@ LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 // --- ТОЧКА ВХОДА ---
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow) {
-    // Требование 10: Защита от повторного запуска (Мьютекс)
+    // Защита от повторного запуска (Мьютекс)
     HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Local\\MyAntivirusSingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBoxW(NULL, L"Антивирус уже запущен!", L"Ошибка", MB_ICONWARNING | MB_OK);
         return 0;
     }
 
-    // Инициализация среды Windows App SDK (нужно для работы WinUI 3 из .exe)
-    HRESULT hr = MddBootstrapInitialize2(0x00010005, L"", MIN_VERSION{0}, MddBootstrapInitializeOptions_OnNoMatch_ShowUI);
-    if (FAILED(hr)) {
-        ReleaseMutex(hMutex);
-        CloseHandle(hMutex);
-        return 0;
-    }
-
     g_taskbarRestartMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
-    // Создаем невидимое окно Win32. Оно нужно ТОЛЬКО чтобы ловить клики по трею.
+    // Создаем невидимое окно Win32.
     const wchar_t CLASS_NAME[] = L"HiddenTrayClass";
     WNDCLASSW wc = {};
     wc.lpfnWndProc = HiddenWindowProc;
@@ -179,18 +248,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     wc.lpszClassName = CLASS_NAME;
     RegisterClassW(&wc);
 
-    // Окно создается, но НЕ показывается (мы не вызываем ShowWindow)
     g_hwndHidden = CreateWindowExW(0, CLASS_NAME, L"Tray Window", WS_OVERLAPPEDWINDOW, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
     AddTrayIcon(g_hwndHidden);
 
     // Запускаем современное WinUI 3 приложение
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     Application::Start([](auto&&) {
-        ::winrt::make<App>(); // Цикл заблокируется здесь, пока мы не нажмем Выход
+        ::winrt::make<App>();
     });
 
-    // Очистка ресурсов после закрытия программы
-    MddBootstrapShutdown();
     ReleaseMutex(hMutex);
     CloseHandle(hMutex);
     return 0;

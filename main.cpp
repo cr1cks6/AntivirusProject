@@ -7,15 +7,17 @@
 // WinRT и WinUI 3.0 заголовки
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.UI.Xaml.Interop.h>       // КРИТИЧНО: Для типов метаданных
+#include <winrt/Windows.UI.Xaml.Interop.h>
+#include <winrt/Windows.UI.Text.h>               // Для работы со шрифтами (Bold)
+#include <winrt/Windows.UI.h>                    // Для работы с цветами
 #include <winrt/Microsoft.UI.h>
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
-#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h> // КРИТИЧНО: Провайдер метаданных
-#include <winrt/Microsoft.UI.Xaml.Markup.h>       // КРИТИЧНО: Для интерфейса IXamlMetadataProvider
+#include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <microsoft.ui.xaml.window.h>
 
 #define WM_TRAYICON (WM_USER + 1)
@@ -29,6 +31,7 @@ using namespace Microsoft::UI::Xaml::Controls;
 using namespace Microsoft::UI::Xaml::XamlTypeInfo;
 using namespace Microsoft::UI::Xaml::Markup;
 using namespace Windows::UI::Xaml::Interop;
+using namespace Microsoft::UI::Xaml::Media;
 
 // Глобальные переменные (состояния)
 HWND g_hwndHidden = NULL;
@@ -46,19 +49,16 @@ void ShowContextMenu(HWND hwnd);
 LRESULT CALLBACK HiddenWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 // --- КЛАСС ПРИЛОЖЕНИЯ WinUI 3 ---
-// Мы наследуемся от IXamlMetadataProvider, чтобы XAML-движок мог работать без .xaml файлов
 struct App : public ApplicationT<App, IXamlMetadataProvider>
 {
     void OnLaunched(LaunchActivatedEventArgs const&)
     {
-        // КРИТИЧЕСКИЙ СУПЕР-ФИКС: Программно загружаем все стандартные стили WinUI 3.0!
-        // Без этого приложения без XAML гарантированно падают при попытке создать любой элемент.
         Resources().MergedDictionaries().Append(XamlControlsResources());
 
         g_xamlWindow = Window();
         g_xamlWindow.Title(L"Антивирус (Главное окно)");
 
-        // Меню главного окна "Файл -> Выход"
+        // 1. Создаем верхнее меню "Файл -> Выход"
         MenuBar menuBar;
         MenuBarItem fileMenu;
         fileMenu.Title(L"Файл");
@@ -68,15 +68,74 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
         fileMenu.Items().Append(exitItem);
         menuBar.Items().Append(fileMenu);
 
-        StackPanel panel;
-        panel.Children().Append(menuBar);
-        
-        TextBlock text;
-        text.Text(L"Антивирус работает в фоне. Это интерфейс WinUI 3.0!");
-        text.Margin({20, 20, 20, 20});
-        panel.Children().Append(text);
+        // 2. Создаем красивую центральную карточку в стиле Windows 11
+        Border card;
+        // Тёмно-серый приятный фон для карточки (вместо глухого чёрного)
+        card.Background(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 32, 32, 32)));
+        card.CornerRadius(CornerRadius{12}); // Закругляем углы карточки
+        card.Padding({40, 40, 40, 40});
+        card.Width(480);
+        card.HorizontalAlignment(HorizontalAlignment::Center);
+        card.VerticalAlignment(VerticalAlignment::Center);
 
-        g_xamlWindow.Content(panel);
+        // Стопка элементов внутри карточки
+        StackPanel cardContent;
+        cardContent.Spacing(18); // Автоматический красивый отступ между элементами
+
+        // Огромная иконка щита с галочкой (код \uF13C в шрифте Segoe Fluent Icons)
+        FontIcon shieldIcon;
+        shieldIcon.Glyph(L"\uF13C");
+        shieldIcon.FontSize(80);
+        // Красивый Fluent Green цвет для безопасного статуса
+        shieldIcon.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 16, 124, 65)));
+
+        // Крупный жирный заголовок статуса
+        TextBlock titleText;
+        titleText.Text(L"Компьютер защищен");
+        titleText.FontSize(24);
+        titleText.FontWeight(Windows::UI::Text::FontWeights::Bold());
+        titleText.HorizontalAlignment(HorizontalAlignment::Center);
+
+        // Описание состояния системы
+        TextBlock subText;
+        subText.Text(L"Активная защита включена. Угроз безопасности не обнаружено.");
+        subText.FontSize(13);
+        // Приглушенный серый цвет для описания
+        subText.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 180, 180, 180)));
+        subText.HorizontalAlignment(HorizontalAlignment::Center);
+        subText.TextAlignment(TextAlignment::Center);
+        subText.TextWrapping(TextWrapping::Wrap);
+
+        // Современная кнопка сканирования
+        Button scanButton;
+        scanButton.Content(winrt::box_value(L"Быстрое сканирование"));
+        scanButton.HorizontalAlignment(HorizontalAlignment::Center);
+        scanButton.Padding({24, 12, 24, 12});
+
+        // Собираем карточку
+        cardContent.Children().Append(shieldIcon);
+        cardContent.Children().Append(titleText);
+        cardContent.Children().Append(subText);
+        cardContent.Children().Append(scanButton);
+        card.Child(cardContent);
+
+        // 3. Создаем сетку (Grid) для всего окна
+        Grid rootLayout;
+        RowDefinition r1, r2;
+        r1.Height(GridLength{0, GridUnitType::Auto}); // Строка под меню
+        r2.Height(GridLength{1, GridUnitType::Star}); // Строка под рабочую область (занимает всё пространство)
+        rootLayout.RowDefinitions().Append(r1);
+        rootLayout.RowDefinitions().Append(r2);
+
+        // Кладём меню в верхнюю строчку
+        rootLayout.Children().Append(menuBar);
+        Grid::SetRow(menuBar, 0);
+
+        // Кладём карточку в центральную рабочую область (она автоматически выровняется по центру)
+        rootLayout.Children().Append(card);
+        Grid::SetRow(card, 1);
+
+        g_xamlWindow.Content(rootLayout);
 
         // Получаем доступ к системному управлению окном WinUI
         auto windowNative = g_xamlWindow.as<IWindowNative>();
@@ -104,7 +163,7 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
     }
 
 private:
-    XamlControlsXamlMetaDataProvider m_provider; // Локальный провайдер стилей и типов
+    XamlControlsXamlMetaDataProvider m_provider;
 };
 
 // --- ФУНКЦИИ WIN32 ДЛЯ ТРЕЯ ---

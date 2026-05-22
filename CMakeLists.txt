@@ -35,5 +35,10 @@ set_target_properties(Antivirus PROPERTIES
     VS_GLOBAL_RuntimeIdentifiers "win;win-x86;win-x64;win-arm;win-arm64"
 )
 
+# --- ИСПРАВЛЕНИЕ КОДИРОВКИ (КРАКОЗЯБР) ДЛЯ КОНКРЕТНОЙ ЦЕЛИ ---
+if(MSVC)
+    target_compile_options(Antivirus PRIVATE "/utf-8")
+endif()
+
 # Подключаем системные библиотеки Windows
 target_link_libraries(Antivirus PRIVATE shell32.lib user32.lib)

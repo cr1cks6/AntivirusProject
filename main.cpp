@@ -19,6 +19,7 @@
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <microsoft.ui.xaml.window.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h> 
 
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001

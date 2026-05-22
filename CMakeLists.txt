@@ -12,7 +12,8 @@ set(RPC_SERVER "${CMAKE_CURRENT_BINARY_DIR}/AntivirusRpc_s.c")
 
 add_custom_command(
     OUTPUT "${RPC_HEADER}" "${RPC_CLIENT}" "${RPC_SERVER}"
-    COMMAND midl /char signed /env x64 /out "${CMAKE_CURRENT_BINARY_DIR}" "${RPC_IDL}"
+    # КРИТИЧНО: Явно передаем ключи /header, /cstub и /sstub, чтобы файлы назвались правильно!
+    COMMAND midl /char signed /env x64 /out "${CMAKE_CURRENT_BINARY_DIR}" /header "${RPC_HEADER}" /cstub "${RPC_CLIENT}" /sstub "${RPC_SERVER}" "${RPC_IDL}"
     DEPENDS "${RPC_IDL}"
     COMMENT "Compiling RPC IDL with MIDL..."
 )
@@ -51,7 +52,7 @@ target_link_libraries(Antivirus PRIVATE shell32.lib user32.lib rpcrt4.lib wtsapi
 # --- ЦЕЛЬ 2: Системная служба ---
 add_executable(AntivirusService service.cpp "${RPC_SERVER}" "${RPC_HEADER}")
 
-# КРИТИЧНО: Применяем те же свойства нативной платформы, чтобы убрать ошибку NuGet "Sequence contains no elements"
+# Применяем те же свойства нативной платформы, чтобы убрать ошибку NuGet "Sequence contains no elements"
 set_target_properties(AntivirusService PROPERTIES
     VS_GLOBAL_NuGetTargetMoniker "native,Version=v0.0"
     VS_GLOBAL_TargetFrameworkMoniker "native,Version=v0.0"

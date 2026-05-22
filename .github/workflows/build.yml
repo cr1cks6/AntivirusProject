@@ -20,8 +20,20 @@ jobs:
     - name: Build with CMake and Restore Packages
       run: cmake --build build --config Release -- /restore
 
+    - name: Prepare Clean Package
+      shell: pwsh
+      run: |
+        # Создаем чистую папку dist/Antivirus
+        New-Item -ItemType Directory -Force -Path dist/Antivirus
+        # Копируем туда ТОЛЬКО то, что нужно пользователю для запуска
+        Copy-Item -Path build/Release/Antivirus.exe -Destination dist/Antivirus/
+        Copy-Item -Path build/Release/*.dll -Destination dist/Antivirus/
+        if (Test-Path "build/Release/resources.pri") {
+            Copy-Item -Path build/Release/resources.pri -Destination dist/Antivirus/
+        }
+
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Antivirus-Executable-WinUI3
-        path: build/Release/
+        path: dist/

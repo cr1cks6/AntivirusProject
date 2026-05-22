@@ -8,12 +8,16 @@ build-windows:
   script:
     - cmake -B build -G "Visual Studio 17 2022" -A x64
     - cmake --build build --config Release -- /restore
-    # Создаем чистую структуру папок для GitLab
+    # Создаем структуру и копируем рекурсивно все подпапки
     - mkdir dist
     - mkdir dist\Antivirus
-    - copy build\Release\Antivirus.exe dist\Antivirus\
-    - copy build\Release\*.dll dist\Antivirus\
-    - if exist build\Release\resources.pri copy build\Release\resources.pri dist\Antivirus\
+    - xcopy build\Release\* dist\Antivirus\ /E /I /H /Y
+    # Очищаем от мусора
+    - del /S /Q dist\Antivirus\*.pdb
+    - del /S /Q dist\Antivirus\*.lib
+    - del /S /Q dist\Antivirus\*.exp
+    - del /S /Q dist\Antivirus\*.ilk
+    - del /S /Q dist\Antivirus\*.obj
   artifacts:
     name: "Antivirus-Executable-WinUI3"
     paths:

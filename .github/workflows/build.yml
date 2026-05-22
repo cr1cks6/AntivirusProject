@@ -25,12 +25,10 @@ jobs:
       run: |
         # Создаем чистую папку dist/Antivirus
         New-Item -ItemType Directory -Force -Path dist/Antivirus
-        # Копируем туда ТОЛЬКО то, что нужно пользователю для запуска
-        Copy-Item -Path build/Release/Antivirus.exe -Destination dist/Antivirus/
-        Copy-Item -Path build/Release/*.dll -Destination dist/Antivirus/
-        if (Test-Path "build/Release/resources.pri") {
-            Copy-Item -Path build/Release/resources.pri -Destination dist/Antivirus/
-        }
+        # Копируем абсолютно ВСЕ файлы и папки из Release
+        Copy-Item -Path build/Release/* -Destination dist/Antivirus/ -Recurse -Force
+        # Удаляем только мусор компиляции (pdb, lib, exp, obj и т.д.) во всех подпапках
+        Get-ChildItem -Path dist/Antivirus -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.lib', '.exp', '.obj', '.iobj', '.ipdb', '.ilk', '.recipe' } | Remove-Item -Force
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4

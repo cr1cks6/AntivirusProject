@@ -24,9 +24,9 @@ set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsPackageType "None")
 set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsAppSDKSelfContained "true")
 set_property(TARGET Antivirus PROPERTY VS_GLOBAL_SelfContained "true")
 
-# --- ОТКЛЮЧАЕМ СЛОМАННЫЙ АВТО-ИНИЦИАЛИЗАТОР MICROSOFT ---
-# Это не даст сработать скрытому коду до запуска нашей функции wWinMain!
+# --- ОТКЛЮЧАЕМ СЛОМАННЫЙ ЗАГРУЗЧИК И ВКЛЮЧАЕМ ЛОКАЛЬНЫЙ АКТИВАТОР ---
 set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsAppSDKBootstrapAutoInitialize "false")
+set_property(TARGET Antivirus PROPERTY VS_GLOBAL_WindowsAppSdkUndockedRegFreeWinRTInitialize "true")
 
 # --- ИСПРАВЛЕНИЕ БАГА VS2022 "Sequence contains no elements" ---
 set_target_properties(Antivirus PROPERTIES

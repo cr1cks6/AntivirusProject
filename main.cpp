@@ -13,10 +13,6 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <microsoft.ui.xaml.window.h>
-#include <MddBootstrap.h> // Загрузчик Windows App SDK
-
-// Указываем линкеру принудительно подключить код загрузчика WinUI 3.0
-#pragma comment(lib, "Microsoft.WindowsAppRuntime.Bootstrap.lib")
 
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001
@@ -166,19 +162,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
         return 0;
     }
 
-    // Инициализация среды Windows App SDK (версия 1.5)
-    HRESULT hr = MddBootstrapInitialize2(
-        0x00010005, 
-        L"", 
-        PACKAGE_VERSION{}, 
-        MddBootstrapInitializeOptions_None
-    );
-    if (FAILED(hr)) {
-        ReleaseMutex(hMutex);
-        CloseHandle(hMutex);
-        return 0;
-    }
-
     g_taskbarRestartMsg = RegisterWindowMessageW(L"TaskbarCreated");
 
     // Создаем невидимое окно Win32.
@@ -192,13 +175,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     g_hwndHidden = CreateWindowExW(0, CLASS_NAME, L"Tray Window", WS_OVERLAPPEDWINDOW, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
     AddTrayIcon(g_hwndHidden);
 
-    // Запускаем современное WinUI 3 приложение
+    // Запускаем современное WinUI 3 приложение (локальный активатор сам всё подгрузит!)
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     Application::Start([](auto&&) {
         ::winrt::make<App>();
     });
 
-    MddBootstrapShutdown();
     ReleaseMutex(hMutex);
     CloseHandle(hMutex);
     return 0;

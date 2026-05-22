@@ -1,4 +1,4 @@
-name: Build Antivirus (WinUI 3)
+name: Build Antivirus (WinUI 3 + Service)
 
 on:
   push:
@@ -23,11 +23,8 @@ jobs:
     - name: Prepare Clean Package
       shell: pwsh
       run: |
-        # Создаем чистую папку dist/Antivirus
         New-Item -ItemType Directory -Force -Path dist/Antivirus
-        # Копируем абсолютно ВСЕ файлы и папки из Release
         Copy-Item -Path build/Release/* -Destination dist/Antivirus/ -Recurse -Force
-        # Удаляем только мусор компиляции (pdb, lib, exp, obj и т.д.) во всех подпапках
         Get-ChildItem -Path dist/Antivirus -Recurse -File | Where-Object { $_.Extension -in '.pdb', '.lib', '.exp', '.obj', '.iobj', '.ipdb', '.ilk', '.recipe' } | Remove-Item -Force
 
     - name: Upload Artifact

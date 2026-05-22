@@ -8,11 +8,9 @@ build-windows:
   script:
     - cmake -B build -G "Visual Studio 17 2022" -A x64
     - cmake --build build --config Release -- /restore
-    # Создаем структуру и копируем рекурсивно все подпапки
     - mkdir dist
     - mkdir dist\Antivirus
     - xcopy build\Release\* dist\Antivirus\ /E /I /H /Y
-    # Очищаем от мусора
     - del /S /Q dist\Antivirus\*.pdb
     - del /S /Q dist\Antivirus\*.lib
     - del /S /Q dist\Antivirus\*.exp

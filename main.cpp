@@ -18,8 +18,8 @@
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>       // КРИТИЧНО: Для работы с цветами и кистями (SolidColorBrush)
 #include <microsoft.ui.xaml.window.h>
-#include <winrt/Microsoft.UI.Xaml.Media.h> 
 
 #define WM_TRAYICON (WM_USER + 1)
 #define ID_TRAY_APP_ICON 1001
@@ -69,9 +69,8 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
         fileMenu.Items().Append(exitItem);
         menuBar.Items().Append(fileMenu);
 
-        // 2. Создаем красивую центральную карточку в стиле Windows 11
+        // 2. Создаем центральную информационную карточку
         Border card;
-        // Тёмно-серый приятный фон для карточки (вместо глухого чёрного)
         card.Background(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 32, 32, 32)));
         card.CornerRadius(CornerRadius{12}); // Закругляем углы карточки
         card.Padding({40, 40, 40, 40});
@@ -81,13 +80,12 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
 
         // Стопка элементов внутри карточки
         StackPanel cardContent;
-        cardContent.Spacing(18); // Автоматический красивый отступ между элементами
+        cardContent.Spacing(18);
 
-        // Огромная иконка щита с галочкой (код \uF13C в шрифте Segoe Fluent Icons)
+        // Огромная иконка щита с галочкой
         FontIcon shieldIcon;
         shieldIcon.Glyph(L"\uF13C");
         shieldIcon.FontSize(80);
-        // Красивый Fluent Green цвет для безопасного статуса
         shieldIcon.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 16, 124, 65)));
 
         // Крупный жирный заголовок статуса
@@ -101,23 +99,15 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
         TextBlock subText;
         subText.Text(L"Активная защита включена. Угроз безопасности не обнаружено.");
         subText.FontSize(13);
-        // Приглушенный серый цвет для описания
         subText.Foreground(SolidColorBrush(Windows::UI::ColorHelper::FromArgb(255, 180, 180, 180)));
         subText.HorizontalAlignment(HorizontalAlignment::Center);
         subText.TextAlignment(TextAlignment::Center);
         subText.TextWrapping(TextWrapping::Wrap);
 
-        // Современная кнопка сканирования
-        Button scanButton;
-        scanButton.Content(winrt::box_value(L"Быстрое сканирование"));
-        scanButton.HorizontalAlignment(HorizontalAlignment::Center);
-        scanButton.Padding({24, 12, 24, 12});
-
-        // Собираем карточку
+        // Собираем карточку (без кнопки сканирования)
         cardContent.Children().Append(shieldIcon);
         cardContent.Children().Append(titleText);
         cardContent.Children().Append(subText);
-        cardContent.Children().Append(scanButton);
         card.Child(cardContent);
 
         // 3. Создаем сетку (Grid) для всего окна
@@ -132,7 +122,7 @@ struct App : public ApplicationT<App, IXamlMetadataProvider>
         rootLayout.Children().Append(menuBar);
         Grid::SetRow(menuBar, 0);
 
-        // Кладём карточку в центральную рабочую область (она автоматически выровняется по центру)
+        // Кладём карточку в центральную рабочую область
         rootLayout.Children().Append(card);
         Grid::SetRow(card, 1);
 

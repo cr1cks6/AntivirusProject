@@ -1,8 +1,19 @@
 cmake_minimum_required(VERSION 3.15)
-project(AntivirusProject VERSION 1.0 LANGUAGES CXX)
+# КРИТИЧНО: Включаем поддержку CXX (C++) и C (Си) для компиляции файлов RPC!
+project(AntivirusProject VERSION 1.0 LANGUAGES CXX C)
 
+# Устанавливаем стандарты
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# КРИТИЧНО: Явно настраиваем проект на современную Windows 10/11 и включаем Юникод
+add_compile_definitions(
+    _WIN32_WINNT=0x0A00 
+    WINVER=0x0A00 
+    NTDDI_VERSION=0x0A000000 
+    UNICODE 
+    _UNICODE
+)
 
 # Настройка компиляции IDL файла через системный MIDL
 set(RPC_IDL "${CMAKE_CURRENT_SOURCE_DIR}/AntivirusRpc.idl")
@@ -12,7 +23,6 @@ set(RPC_SERVER "${CMAKE_CURRENT_BINARY_DIR}/AntivirusRpc_s.c")
 
 add_custom_command(
     OUTPUT "${RPC_HEADER}" "${RPC_CLIENT}" "${RPC_SERVER}"
-    # КРИТИЧНО: Явно передаем ключи /header, /cstub и /sstub, чтобы файлы назвались правильно!
     COMMAND midl /char signed /env x64 /out "${CMAKE_CURRENT_BINARY_DIR}" /header "${RPC_HEADER}" /cstub "${RPC_CLIENT}" /sstub "${RPC_SERVER}" "${RPC_IDL}"
     DEPENDS "${RPC_IDL}"
     COMMENT "Compiling RPC IDL with MIDL..."
@@ -52,7 +62,7 @@ target_link_libraries(Antivirus PRIVATE shell32.lib user32.lib rpcrt4.lib wtsapi
 # --- ЦЕЛЬ 2: Системная служба ---
 add_executable(AntivirusService service.cpp "${RPC_SERVER}" "${RPC_HEADER}")
 
-# Применяем те же свойства нативной платформы, чтобы убрать ошибку NuGet "Sequence contains no elements"
+# Применяем те же свойства нативной платформы, чтобы убрать ошибку NuGet
 set_target_properties(AntivirusService PROPERTIES
     VS_GLOBAL_NuGetTargetMoniker "native,Version=v0.0"
     VS_GLOBAL_TargetFrameworkMoniker "native,Version=v0.0"

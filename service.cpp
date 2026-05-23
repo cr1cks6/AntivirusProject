@@ -12,12 +12,12 @@
 #include <string>
 #include <mutex>
 #include <tlhelp32.h>
+#include <fstream> // Для записи логов в файл
 
 // Подключаем сгенерированный MIDL заголовок RPC
 #include "AntivirusRpc_h.h"
 
-// КРИТИЧЕСКИЙ ФОРС-МАЖОРНЫЙ ФИКС: Объявляем макросы сессий вручную,
-// чтобы полностью обезопасить компилятор на серверах сборки от багов SDK!
+// Форс-мажорные дефайны для сессий
 #ifndef SERVICE_CONTROL_SESSION_CHANGE
 #define SERVICE_CONTROL_SESSION_CHANGE 0x0000000E
 #endif
@@ -35,21 +35,26 @@ HANDLE g_ServiceStopEvent = INVALID_HANDLE_VALUE;
 std::mutex g_ProcessesMutex;
 std::vector<HANDLE> g_ActiveGuiHandles;
 
-// --- Системные функции самозащиты процессов ---
+// Функция записи логов для отладки
+void WriteLog(const std::wstring& text) {
+    std::wofstream log(L"C:\\Antivirus\\log.txt", std::ios::app);
+    if (log.is_open()) {
+        log << text << std::endl;
+    }
+}
 
-// БОНУС 2, 3 и 4: Настройка DACL для предотвращения завершения процессов
+// Настройка DACL для предотвращения завершения процессов
 void ProtectProcessFromTermination(HANDLE hProcess) {
     PSID pAdminSid = NULL;
     PSID pUserSid = NULL;
     SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
     
-    // Используем корректные макросы RID (Relative Identifier) вместо REGS
     AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &pAdminSid);
     AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS, 0, 0, 0, 0, 0, 0, &pUserSid);
 
     EXPLICIT_ACCESSW ea[2] = {};
     
-    // БОНУС 4: Запрещаем администраторам завершать процесс (DENY_ACCESS на PROCESS_TERMINATE)
+    // БОНУС 4: Запрещаем администраторам завершать процесс
     ea[0].grfAccessPermissions = PROCESS_TERMINATE;
     ea[0].grfAccessMode = DENY_ACCESS;
     ea[0].grfInheritance = NO_INHERITANCE;
@@ -57,7 +62,7 @@ void ProtectProcessFromTermination(HANDLE hProcess) {
     ea[0].Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
     ea[0].Trustee.ptstrName = (LPWSTR)pAdminSid;
 
-    // БОНУС 2 и 3: Запрещаем обычным пользователям завершать процесс (DENY_ACCESS на PROCESS_TERMINATE)
+    // БОНУС 2 и 3: Запрещаем обычным пользователям завершать процесс
     ea[1].grfAccessPermissions = PROCESS_TERMINATE;
     ea[1].grfAccessMode = DENY_ACCESS;
     ea[1].grfInheritance = NO_INHERITANCE;
@@ -68,27 +73,24 @@ void ProtectProcessFromTermination(HANDLE hProcess) {
     PACL pNewDacl = NULL;
     SetEntriesInAclW(2, ea, NULL, &pNewDacl);
 
-    // Применяем новый список контроля доступа (DACL) к процессу
     SetSecurityInfo(hProcess, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, pNewDacl, NULL);
 
-    // Освобождаем память
     if (pNewDacl) LocalFree(pNewDacl);
     if (pAdminSid) FreeSid(pAdminSid);
     if (pUserSid) FreeSid(pUserSid);
 }
 
-// Требование 1 и 2: Запуск GUI в конкретной сессии пользователя
+// Запуск GUI в конкретной сессии пользователя
 void LaunchGuiInSession(DWORD sessionId) {
+    WriteLog(L"[INFO] Попытка запуска GUI в сессии " + std::to_wstring(sessionId));
     HANDLE hToken = NULL;
-    if (!WTSQueryUserToken(sessionId, &hToken)) return;
+    if (!WTSQueryUserToken(sessionId, &hToken)) {
+        WriteLog(L"[ERROR] WTSQueryUserToken не удался. Ошибка: " + std::to_wstring(GetLastError()));
+        return;
+    }
+    WriteLog(L"[INFO] Токен пользовательской сессии успешно получен.");
 
-    HANDLE hDuplicatedToken = NULL;
-    DuplicateTokenEx(hToken, MAXIMUM_ALLOWED, NULL, SecurityIdentification, TokenPrimary, &hDuplicatedToken);
-    CloseHandle(hToken);
-
-    if (!hDuplicatedToken) return;
-
-    // Получаем путь к нашему GUI (Antivirus.exe лежит рядом со службой)
+    // Получаем путь к нашему GUI
     wchar_t servicePath[MAX_PATH];
     GetModuleFileNameW(NULL, servicePath, MAX_PATH);
     std::wstring guiPath(servicePath);
@@ -105,27 +107,33 @@ void LaunchGuiInSession(DWORD sessionId) {
     PROCESS_INFORMATION pi = {};
     
     void* pEnv = NULL;
-    CreateEnvironmentBlock(&pEnv, hDuplicatedToken, FALSE);
+    if (!CreateEnvironmentBlock(&pEnv, hToken, FALSE)) {
+        WriteLog(L"[WARNING] Ошибка создания среды окружения: " + std::to_wstring(GetLastError()));
+    }
 
-    BOOL success = CreateProcessAsUserW(
-        hDuplicatedToken,
+    // Современный и надежный запуск через Token (специально для служб Windows)
+    BOOL success = CreateProcessWithTokenW(
+        hToken,
+        LOGON_WITH_PROFILE,
         guiPath.c_str(),
-        NULL, NULL, NULL, FALSE,
+        NULL,
         CREATE_UNICODE_ENVIRONMENT,
         pEnv, NULL, &si, &pi
     );
 
     if (success) {
-        // БОНУС 3: Защищаем запущенный GUI от закрытия пользователями и администраторами
+        WriteLog(L"[SUCCESS] Процесс GUI успешно создан! PID: " + std::to_wstring(pi.dwProcessId));
         ProtectProcessFromTermination(pi.hProcess);
 
         std::lock_guard<std::mutex> lock(g_ProcessesMutex);
         g_ActiveGuiHandles.push_back(pi.hProcess);
         CloseHandle(pi.hThread);
+    } else {
+        WriteLog(L"[ERROR] Ошибка CreateProcessWithTokenW: " + std::to_wstring(GetLastError()));
     }
 
     if (pEnv) DestroyEnvironmentBlock(pEnv);
-    CloseHandle(hDuplicatedToken);
+    CloseHandle(hToken);
 }
 
 // Запуск GUI во всех активных пользовательских сессиях (кроме сессии 0)
@@ -133,6 +141,7 @@ void LaunchGuiInAllSessions() {
     WTS_SESSION_INFOW* pSessionInfo = NULL;
     DWORD sessionCount = 0;
     if (WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &pSessionInfo, &sessionCount)) {
+        WriteLog(L"[INFO] Найдено сессий Windows: " + std::to_wstring(sessionCount));
         for (DWORD i = 0; i < sessionCount; ++i) {
             if (pSessionInfo[i].SessionId != 0 && 
                 (pSessionInfo[i].State == WTSActive || pSessionInfo[i].State == WTSDisconnected)) {
@@ -140,10 +149,12 @@ void LaunchGuiInAllSessions() {
             }
         }
         WTSFreeMemory(pSessionInfo);
+    } else {
+        WriteLog(L"[ERROR] Не удалось перечислить сессии. Ошибка: " + std::to_wstring(GetLastError()));
     }
 }
 
-// БОНУС 1: Запрос подтверждения на Secure Desktop (экране Winlogon)
+// БОНУС 1: Запрос подтверждения на Secure Desktop
 bool AskConfirmationOnSecureDesktop(DWORD sessionId) {
     HANDLE hToken = NULL;
     if (!WTSQueryUserToken(sessionId, &hToken)) return true;
@@ -164,7 +175,7 @@ bool AskConfirmationOnSecureDesktop(DWORD sessionId) {
 
     STARTUPINFOW si = {};
     si.cb = sizeof(si);
-    si.lpDesktop = (LPWSTR)L"Winsta0\\Winlogon"; // Запуск строго на защищенном столе!
+    si.lpDesktop = (LPWSTR)L"Winsta0\\Winlogon";
 
     PROCESS_INFORMATION pi = {};
     std::wstring cmd = guiPath + L" --secure-prompt";
@@ -193,9 +204,10 @@ bool AskConfirmationOnSecureDesktop(DWORD sessionId) {
     return confirmed;
 }
 
-// Требование 6: Завершение всех запущенных GUI процессов при остановке службы
+// Завершение всех запущенных GUI процессов при остановке службы
 void TerminateAllGuiProcesses() {
     std::lock_guard<std::mutex> lock(g_ProcessesMutex);
+    WriteLog(L"[INFO] Завершение всех процессов GUI. Количество: " + std::to_wstring(g_ActiveGuiHandles.size()));
     for (HANDLE hProcess : g_ActiveGuiHandles) {
         SetSecurityInfo(hProcess, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, NULL, NULL);
         TerminateProcess(hProcess, 0); 
@@ -206,11 +218,14 @@ void TerminateAllGuiProcesses() {
 
 // Реализация RPC интерфейса остановки службы (с Явным связыванием)
 long StopAntivirusService(handle_t hBinding) {
+    WriteLog(L"[INFO] Получен RPC запрос на остановку службы.");
     DWORD activeSessionId = WTSGetActiveConsoleSessionId();
     if (AskConfirmationOnSecureDesktop(activeSessionId)) {
+        WriteLog(L"[INFO] Остановка службы подтверждена пользователем.");
         RpcMgmtStopServerListening(NULL);
         return 1;
     }
+    WriteLog(L"[INFO] Остановка службы отклонена пользователем.");
     return 0;
 }
 
@@ -225,6 +240,7 @@ DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD dwEventType, LPVOID lpEve
             if (dwEventType == WTS_SESSION_LOGON) {
                 WTSSESSION_NOTIFICATION* pNotification = (WTSSESSION_NOTIFICATION*)lpEventData;
                 if (pNotification->dwSessionId != 0) {
+                    WriteLog(L"[INFO] Обнаружен вход нового пользователя. Сессия: " + std::to_wstring(pNotification->dwSessionId));
                     LaunchGuiInSession(pNotification->dwSessionId);
                 }
             }
@@ -237,8 +253,17 @@ DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD dwEventType, LPVOID lpEve
 
 // Главный поток нашей службы
 void WINAPI ServiceMain(DWORD dwArgc, LPWSTR* lpszArgv) {
+    // Стираем старый лог при каждом новом запуске службы
+    std::wofstream logCleanup(L"C:\\Antivirus\\log.txt", std::ios::trunc);
+    logCleanup.close();
+
+    WriteLog(L"[START] Служба запущена. Инициализация...");
+
     g_StatusHandle = RegisterServiceCtrlHandlerExW(SERVICE_NAME, ServiceCtrlHandler, NULL);
-    if (!g_StatusHandle) return;
+    if (!g_StatusHandle) {
+        WriteLog(L"[FATAL] Не удалось зарегистрировать ServiceCtrlHandler. Ошибка: " + std::to_wstring(GetLastError()));
+        return;
+    }
 
     SERVICE_STATUS status = {};
     status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
@@ -252,14 +277,19 @@ void WINAPI ServiceMain(DWORD dwArgc, LPWSTR* lpszArgv) {
 
     status.dwCurrentState = SERVICE_RUNNING;
     SetServiceStatus(g_StatusHandle, &status);
+    WriteLog(L"[INFO] Статус службы переведен в SERVICE_RUNNING.");
 
+    // Запускаем процессы во всех сессиях
     LaunchGuiInAllSessions();
 
+    WriteLog(L"[INFO] Запуск RPC сервера...");
     RpcServerUseProtseqEpW((RPC_WSTR)L"ncalrpc", RPC_C_PROTSEQ_MAX_REQS_DEFAULT, (RPC_WSTR)L"AntivirusRpcEndpoint", NULL);
     RpcServerRegisterIf(AntivirusRpc_v1_0_s_ifspec, NULL, NULL);
     
+    // Блокирующий вызов RPC
     RpcServerListen(1, RPC_C_LISTEN_MAX_CALLS_DEFAULT, FALSE);
 
+    WriteLog(L"[STOP] Начат процесс остановки службы...");
     status.dwCurrentState = SERVICE_STOP_PENDING;
     SetServiceStatus(g_StatusHandle, &status);
 
@@ -269,6 +299,7 @@ void WINAPI ServiceMain(DWORD dwArgc, LPWSTR* lpszArgv) {
 
     status.dwCurrentState = SERVICE_STOPPED;
     SetServiceStatus(g_StatusHandle, &status);
+    WriteLog(L"[STOP] Служба успешно остановлена.");
 }
 
 int wmain(int argc, wchar_t* argv[]) {
